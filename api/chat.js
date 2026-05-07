@@ -9,7 +9,41 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { messages } = req.body;
+    let { messages } = req.body;
+
+    // Truncate large text content to stay under token limits
+    const MAX_CHARS_PER_TEXT = 8000; // ~2000-3000 tokens roughly
+    const MAX_TOTAL_TEXT = 15000; // total text across all messages
+
+    let totalTextLength = 0;
+
+    messages = messages.map(msg => {
+      if (typeof msg.content === 'string') {
+        totalTextLength += msg.content.length;
+        if (msg.content.length > MAX_CHARS_PER_TEXT) {
+          msg.content = msg.content.slice(0, MAX_CHARS_PER_TEXT) + 
+            `\n\n[... Content truncated: ${msg.content.length - MAX_CHARS_PER_TEXT} characters removed to fit token limits ...]`;
+        }
+        return msg;
+      }
+      
+      // Handle array content (images + text)
+      if (Array.isArray(msg.content)) {
+        msg.content = msg.content.map(part => {
+          if (part.type === 'text' && part.text) {
+            totalTextLength += part.text.length;
+            if (part.text.length > MAX_CHARS_PER_TEXT) {
+              part.text = part.text.slice(0, MAX_CHARS_PER_TEXT) + 
+                `\n\n[... Content truncated: ${part.text.length - MAX_CHARS_PER_TEXT} characters removed to fit token limits ...]`;
+            }
+          }
+          return part;
+        });
+        return msg;
+      }
+      
+      return msg;
+    });
 
     // Use vision model if any message contains an image, else use text model
     const hasImage = messages.some(m =>
