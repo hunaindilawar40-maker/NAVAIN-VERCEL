@@ -306,6 +306,15 @@ function scrollBottom() { const el = document.getElementById('messages'); el.scr
 function escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
 function formatText(text) {
+  // FIX: Ensure text is a string before processing
+  if (typeof text !== 'string') {
+    try {
+      text = JSON.stringify(text, null, 2);
+    } catch {
+      text = String(text);
+    }
+  }
+  
   return text
     .replace(/```(\w*)\n?([\s\S]*?)```/g, (_, l, c) => `<pre><code>${escHtml(c.trim())}</code></pre>`)
     .replace(/`([^`]+)`/g, '<code>$1</code>')
@@ -399,9 +408,19 @@ function appendMessage(role, textContent, attachments) {
     });
   }
 
+  // FIX: Ensure textContent is a string before displaying
+  let safeText = textContent;
+  if (typeof safeText !== 'string') {
+    try {
+      safeText = JSON.stringify(safeText, null, 2);
+    } catch {
+      safeText = String(safeText);
+    }
+  }
+
   // Show text
-  if (textContent) {
-    bubbleContent += `<div class="bubble">${role === 'ai' ? formatText(textContent) : escHtml(textContent)}</div>`;
+  if (safeText) {
+    bubbleContent += `<div class="bubble">${role === 'ai' ? formatText(safeText) : escHtml(safeText)}</div>`;
   }
 
   d.innerHTML = `${avatarHtml}<div class="bubble-wrap">${bubbleContent}</div>`;
@@ -484,16 +503,27 @@ async function sendMessage() {
     const data = await res.json();
     removeTyping();
 
-    if (data.choices?.[0]) {
+    // FIX: Better error handling for API response
+    if (!res.ok) {
+      const errorMsg = data?.error?.message || data?.error || `HTTP ${res.status}: ${res.statusText}`;
+      appendMessage('ai', `⚠️ API Error: ${errorMsg}`, null);
+      return;
+    }
+
+    if (data.choices?.[0]?.message?.content) {
       const reply = data.choices[0].message.content;
       messages.push({ role: 'assistant', content: reply });
       appendMessage('ai', reply, null);
+    } else if (data.error) {
+      appendMessage('ai', `⚠️ ${data.error.message || data.error}`, null);
     } else {
-      appendMessage('ai', `⚠️ ${data.error || 'Something went wrong. Please try again.'}`, null);
+      appendMessage('ai', `⚠️ Unexpected response format. Please try again.`, null);
+      console.error('Unexpected API response:', data);
     }
   } catch (err) {
     removeTyping();
     appendMessage('ai', '⚠️ Connection error. Please try again.', null);
+    console.error('Fetch error:', err);
   }
 
   isLoading = false;
