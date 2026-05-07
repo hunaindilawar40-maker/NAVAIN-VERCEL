@@ -11,41 +11,25 @@ export default async function handler(req, res) {
   try {
     let { messages } = req.body;
 
-    // Truncate large text content to stay under token limits
-    const MAX_CHARS_PER_TEXT = 8000; // ~2000-3000 tokens roughly
-    const MAX_TOTAL_TEXT = 15000; // total text across all messages
-
-    let totalTextLength = 0;
-
+    // Backend safety: truncate any oversized messages
+    const MAX_CHARS_PER_MESSAGE = 10000;
     messages = messages.map(msg => {
-      if (typeof msg.content === 'string') {
-        totalTextLength += msg.content.length;
-        if (msg.content.length > MAX_CHARS_PER_TEXT) {
-          msg.content = msg.content.slice(0, MAX_CHARS_PER_TEXT) + 
-            `\n\n[... Content truncated: ${msg.content.length - MAX_CHARS_PER_TEXT} characters removed to fit token limits ...]`;
-        }
-        return msg;
+      if (typeof msg.content === 'string' && msg.content.length > MAX_CHARS_PER_MESSAGE) {
+        msg.content = msg.content.slice(0, MAX_CHARS_PER_MESSAGE) + 
+          `\n\n[... Truncated by server: ${msg.content.length - MAX_CHARS_PER_MESSAGE} chars removed ...]`;
       }
-      
-      // Handle array content (images + text)
       if (Array.isArray(msg.content)) {
         msg.content = msg.content.map(part => {
-          if (part.type === 'text' && part.text) {
-            totalTextLength += part.text.length;
-            if (part.text.length > MAX_CHARS_PER_TEXT) {
-              part.text = part.text.slice(0, MAX_CHARS_PER_TEXT) + 
-                `\n\n[... Content truncated: ${part.text.length - MAX_CHARS_PER_TEXT} characters removed to fit token limits ...]`;
-            }
+          if (part.type === 'text' && part.text && part.text.length > MAX_CHARS_PER_MESSAGE) {
+            part.text = part.text.slice(0, MAX_CHARS_PER_MESSAGE) + 
+              `\n\n[... Truncated by server ...]`;
           }
           return part;
         });
-        return msg;
       }
-      
       return msg;
     });
 
-    // Use vision model if any message contains an image, else use text model
     const hasImage = messages.some(m =>
       Array.isArray(m.content) && m.content.some(c => c.type === "image_url")
     );
