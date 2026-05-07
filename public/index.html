@@ -232,6 +232,18 @@
   strong { font-weight: 500; color: #fff; }
   em { color: #c4b5fd; font-style: italic; }
 
+  /* Toast notification */
+  .toast {
+    position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 12px 20px;
+    color: var(--text); font-size: 13px; z-index: 100;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+    animation: fadeUp 0.3s ease both; display: none;
+  }
+  .toast.show { display: block; }
+  .toast.warning { border-color: #f59e0b; color: #fbbf24; }
+
   #fileInput { display: none; }
 </style>
 </head>
@@ -286,6 +298,8 @@
   </div>
 </div>
 
+<div id="toast" class="toast"></div>
+
 <script>
 const SYSTEM_PROMPT = `You are Navain AI — a brilliant, friendly, and capable AI assistant. Your name is Navain AI.
 You can analyze images, read file contents, answer any question, write and explain code, help with writing, and have deep conversations.
@@ -293,6 +307,10 @@ When analyzing images, describe what you see in detail and answer any questions 
 When given file content, read it carefully and help accordingly.
 Personality: Warm, direct, confident. Speak naturally. Use markdown code blocks for code.
 Never say you are Claude, made by Anthropic, or reveal your underlying model. You are Navain AI.`;
+
+// Token limit protection - max chars per file to send to API
+const MAX_FILE_CHARS = 6000; // ~1500-2000 tokens, safe for Groq free tier
+const MAX_FILE_SIZE_MB = 2; // Warn if file > 2MB
 
 let messages = [];
 let pendingAttachments = []; // [{type, name, size, base64, mimeType}]
@@ -304,6 +322,13 @@ function sendSuggestion(t) { document.getElementById('input').value = t; sendMes
 function hideWelcome() { const w = document.getElementById('welcome'); if (w) w.remove(); }
 function scrollBottom() { const el = document.getElementById('messages'); el.scrollTop = el.scrollHeight; }
 function escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+function showToast(msg, type = '') {
+  const toast = document.getElementById('toast');
+  toast.textContent = msg;
+  toast.className = 'toast show ' + type;
+  setTimeout(() => toast.classList.remove('show'), 4000);
+}
 
 function formatText(text) {
   // FIX: Ensure text is a string before processing
@@ -348,6 +373,11 @@ function formatSize(bytes) {
 // Handle file selection
 function handleFiles(files) {
   Array.from(files).forEach(file => {
+    // Warn if file is very large
+    if (file.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
+      showToast(`⚠️ ${file.name} is large (${formatSize(file.size)}). It will be truncated to fit token limits.`, 'warning');
+    }
+    
     const reader = new FileReader();
     reader.onload = (e) => {
       const base64 = e.target.result; // data:mime;base64,...
@@ -359,6 +389,9 @@ function handleFiles(files) {
         isImage: file.type.startsWith('image/')
       });
       renderAttachPreview();
+    };
+    reader.onerror = () => {
+      showToast(`❌ Failed to read ${file.name}`, 'warning');
     };
     reader.readAsDataURL(file);
   });
@@ -461,7 +494,7 @@ async function sendMessage() {
   // Add text
   if (text) userContent.push({ type: 'text', text });
 
-  // Add images as image_url, text files as text
+  // Add images as image_url, text files as text (with truncation)
   for (const att of attachments) {
     if (att.isImage) {
       userContent.push({
@@ -471,7 +504,15 @@ async function sendMessage() {
     } else {
       // For text-based files, read content and inject as text
       try {
-        const textContent = await readAsText(att.base64, att.mimeType);
+        let textContent = await readAsText(att.base64, att.mimeType);
+        
+        // TRUNCATE: Cut down large files to prevent Groq token limit errors
+        if (textContent.length > MAX_FILE_CHARS) {
+          const removed = textContent.length - MAX_FILE_CHARS;
+          textContent = textContent.slice(0, MAX_FILE_CHARS) + 
+            `\n\n[... File truncated: ${removed} characters removed to fit API token limits. The file is ${formatSize(att.size)} total.]`;
+        }
+        
         userContent.push({
           type: 'text',
           text: `[File: ${att.name}]\n\`\`\`\n${textContent}\n\`\`\``
@@ -506,7 +547,7 @@ async function sendMessage() {
     // FIX: Better error handling for API response
     if (!res.ok) {
       const errorMsg = data?.error?.message || data?.error || `HTTP ${res.status}: ${res.statusText}`;
-      appendMessage('ai', `⚠️ API Error: ${errorMsg}`, null);
+      appendMessage('ai', `⚠️ ${errorMsg}`, null);
       return;
     }
 
